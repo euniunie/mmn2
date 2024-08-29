@@ -1,0 +1,237 @@
+% clear all;
+% close all;
+% rng('shuffle');
+%% Parameters
+% Subject Details
+timestamp = datestr(now, 'yyyymmddTHHMMSS');
+subj = input('Enter subject ID: ', 's');
+filename = [subj timestamp];
+fs = 44100; % Sampling frequency
+numSpk = 2; % Number of loudspeakers (2: L/R)
+AttenuationFactor = 0.5; % Don't make it greater than 0.5 to avoid saturation
+AmplitudeRise = 'fault';
+%%load data
+normal = audioread('D:\experiment\eunice\Normal.wav');
+intensityDev = audioread('D:\experiment\eunice\IntensityDev.wav');
+pitchDev = audioread('D:\experiment\eunice\PitchDev.wav');
+doubleDev = audioread('D:\experiment\eunice\DoubleDev.wav');
+% Parameters
+numStimuli = 900;
+numNormal = 630;
+numDeviant = 270;
+numDeviantTypes = 3;
+% Triggers for different types
+NORMAL_TRIGGER = 10;
+INTENSITY_DEVIANT_TRIGGER = 20;
+PITCH_DEVIANT_TRIGGER = 30;
+DOUBLE_DEVIANT_TRIGGER = 40;
+% First, shuffle the deviants
+deviantIndices = repmat([INTENSITY_DEVIANT_TRIGGER, PITCH_DEVIANT_TRIGGER, DOUBLE_DEVIANT_TRIGGER], 1, numDeviant / numDeviantTypes);
+123
+andomOrder = randperm(length(deviantIndices));
+shuffledDeviants = deviantIndices(randomOrder);
+% Initialize the final order with the first five stimuli as normal
+finalOrder = zeros(1, numStimuli);
+finalOrder(1:5) = NORMAL_TRIGGER;  % First 5 are always NORMAL
+% Combine remaining normals and shuffled deviants
+remainingNormals = repmat(NORMAL_TRIGGER, 1, numNormal - 5); % 625 remaining NORMAL stimuli
+remainingStimuli = [remainingNormals shuffledDeviants];
+% Shuffle remaining stimuli
+remainingStimuli = remainingStimuli(randperm(length(remainingStimuli)));
+% Add remaining stimuli to final order while ensuring no two deviants are adjacent
+finalOrder(6:end) = remainingStimuli;
+% Ensure no two deviants are adjacent
+for i = 7:numStimuli
+   if finalOrder(i) ~= NORMAL_TRIGGER && finalOrder(i-1) ~= NORMAL_TRIGGER
+       % Find the next normal stimulus to swap
+       swapIndex = find(finalOrder(i+1:end) == NORMAL_TRIGGER, 1) + i;
+       if ~isempty(swapIndex)
+           % Swap the current deviant with the next normal
+           temp = finalOrder(i);
+           finalOrder(i) = finalOrder(swapIndex);
+           finalOrder(swapIndex) = temp;
+       end
+   end
+end
+%% Start EEG trigger device
+daqreset
+% daq.getDevices
+sessionEEG = daq.createSession('ni');
+try
+   ch = addDigitalChannel(sessionEEG,'Dev1', 'Port2/Line0:7', 'OutputOnly');
+catch
+   ch = addDigitalChannel(sessionEEG,'Dev2', 'Port2/Line0:7', 'OutputOnly');
+end
+%% PTB param --> Open a full screen figure
+% intensityFactor = 1;
+% % whichScreen = max(Screen('Screens'));
+% whichScreen = 1;
+% rect = Screen(whichScreen,'Rect'); % Gets Screen dimensions
+% HideCursor;
+% win = Screen('OpenWindow', whichScreen);
+% blk = BlackIndex(win);
+% wht = WhiteIndex(win)*intensityFactor;  % Retrieves the CLUT color code for white
+% % txtSz = 20;
+% txtSz = 50;
+% Screen('FillRect',win,blk);
+% Screen(win,'TextSize',txtSz);
+figure;
+set(gcf, 'WindowState','fullscreen', 'menubar','none', 'toolbar','none', 'color','k')
+%% Display "Press any key to start."
+% Screen('DrawText',win,'Press any key to start.',rect(3)/2-500,rect(4)/2-25,wht);
+% Screen('Flip',win);
+delete(gca); set(gca,'visible','off');
+text(0.235,0.48,'Press any key to start.','color',[1 1 1],'fontsize',50); drawnow();
+% WaitKeyInputs;
+getkey;
+%% Display fixation cross when a key is entered.
+% Screen('DrawText',win,'+',rect(3)/2-25,rect(4)/2-25,wht);
+% Screen('Flip',win);
+delete(gca); set(gca,'visible','off');
+text(0.465,0.48,'+','color',[1 1 1],'fontsize',50); drawnow();
+%% Start experiment!
+InitializePsychSound
+pahandle = PsychPortAudio('Open', [], [], 1, fs, numSpk);
+triggersAll = [];
+% EEG saving trigger
+% start recording ER
+outputSingleScan(sessionEEG, dec2binvec(254,8))
+outputSingleScan(sessionEEG, [0 0 0 0 0 0 0 0])
+WaitSecs(5);
+for it = 1:length(finalOrder)
+   % Select stimulus type based on condition order
+   switch finalOrder(it)
+       case NORMAL_TRIGGER
+           audio = normal; % Corrected to match the variable names
+           triggerNumber = 10;
+       case INTENSITY_DEVIANT_TRIGGER % Intensity Deviant
+           audio = intensityDev; % Corrected case sensitivity
+           triggerNumber = 20;
+       case PITCH_DEVIANT_TRIGGER % Pitch Deviant
+           audio = pitchDev; % Corrected case sensitivity
+           triggerNumber = 30;
+       case DOUBLE_DEVIANT_TRIGGER % Double Deviant
+           audio = doubleDev; % Corrected case sensitivity
+           triggerNumber = 40;
+   end
+       % Attenuation
+       audio = audio * AttenuationFactor;
+       PsychPortAudio('FillBuffer', pahandle, audio');
+       PsychPortAudio('Start',pahandle);
+       outputSingleScan(sessionEEG, dec2binvec(triggerNumber,8))
+       outputSingleScan(sessionEEG, [0 0 0 0 0 0 0 0])
+   % Set a random wait time between stimuli (800ms to 1200ms)
+   randomInterval = randi([800, 1200], 1) / 1000; % Convert to seconds
+   WaitSecs(randomInterval); % Random wait
+end
+  
+%    
+%     %     %%%%% Start noise-onset marker
+%     %     fprintf(q, ['M;1;;;StartNoise',sprintf('_%03i',it),sprintf('_%02i',SNRs(it)),';D']); %marker for iMotions start of noise
+%    
+%     % Display written question on the screen
+%      delete(gca); set(gca,'visible','off');
+%         text(0.2,0.53,'Rise or Fall? (1: rise, 2: fall)','color',[1 1 1],'fontsize',50);
+%     drawnow();
+%     outputSingleScan(sessionEEG, dec2binvec(99,8))
+%     outputSingleScan(sessionEEG, [0 0 0 0 0 0 0 0])
+%        
+%     answer = NaN;
+%
+%     [responses(it),RTs(it)]=getkey;
+% %     t = 0;
+% %     btncount = 0;
+% %     status = 0;
+% %     t0resp = tic;
+% %     while (t < 30)
+% %         [keyIsDown, resptime, keyCode] = KbCheck;
+% %         if keyIsDown
+% %             if status == 0
+% %                 status = 1;
+% %             else
+% %                 t = toc(t0resp);
+% %                 continue
+% %             end
+% %             btncount = btncount + 1;
+% %             if btncount == 1
+% %                 %                 rt(it) = resptime - tResp; % response time
+% %                 rt(it) = t; % response time
+% %             end
+% %             cckey = KbName(keyCode);  % find out which key was pressed
+% %             if iscell(cckey)
+% %                 cckey = cckey{1};
+% %             end
+% %             answer(btncount) = str2double(cckey(1));
+% %
+% %         else
+% %             status = 0;
+% %         end
+% %        
+% %         if btncount > 0
+% %             break
+% %         end
+% %         t = toc(t0resp);
+% %     end
+%    
+% %     if strcmp(cckey,'esc')
+% %         save([filename '_temp.mat'])
+% %         %         sca
+% %     end
+%    
+% %     respList(it) = answer;
+%       
+%     if responses(it) == 1 % rise
+%         outputSingleScan(sessionEEG, dec2binvec(100,8))
+%         outputSingleScan(sessionEEG, [0 0 0 0 0 0 0 0])
+%     elseif responses(it) == 2 % fall
+%         outputSingleScan(sessionEEG, dec2binvec(200,8))
+%         outputSingleScan(sessionEEG, [0 0 0 0 0 0 0 0])
+%     else % something else
+%         outputSingleScan(sessionEEG, dec2binvec(250,8))
+%         outputSingleScan(sessionEEG, [0 0 0 0 0 0 0 0])
+%     end
+%    
+%     disp(responses(it))
+%     %     disp(SNR(it+1));
+%    
+%     %     Screen('DrawText',win,'+',rect(3)/2-25,rect(4)/2-25,wht);
+%     %     Screen('Flip',win);
+%     delete(gca); set(gca,'visible','off');
+%     text(0.465,0.48,'+','color',[1 1 1],'fontsize',50); drawnow();
+%    
+%    
+%     if (mod(it,30) == 0) && (it ~= numTrials) && (it ~= 320)
+%         save([filename '_temp.mat'])
+%         %         Screen('DrawText',win,sprintf('%02i / %01i trials done.',it,numTrials),rect(3)/2-500,rect(4)/2-125,wht);
+%         %         Screen('DrawText',win,'Take a break as you wish.',rect(3)/2-500,rect(4)/2-50,wht);
+%         %         Screen('DrawText',win,'Press any key to continue.',rect(3)/2-500,rect(4)/2+25,wht);
+%         %         Screen('Flip',win);
+%         delete(gca); set(gca,'visible','off');
+%         text(0.05,0.6,sprintf('%01i / %01i trials done.',it,numTrials),'color',[1 1 1],'fontsize',50);
+%         text(0.05,0.5,'Take a break as long as you want.','color',[1 1 1],'fontsize',50);
+%         text(0.05,0.4,'Press any key when you like to continue.','color',[1 1 1],'fontsize',50);
+%         drawnow();
+% %         WaitKeyInputs;
+%         getkey;
+%         delete(gca); set(gca,'visible','off');
+%         text(0.465,0.48,'+','color',[1 1 1],'fontsize',50); drawnow();
+%     end
+ 
+% Stop playback:
+PsychPortAudio('Stop', pahandle);
+% Close the audio device:
+PsychPortAudio('Close', pahandle);
+save([filename '.mat'])
+% Screen('DrawText',win,'End of the experiment.',rect(3)/2-500,rect(4)/2-25,wht);
+% Screen('Flip',win);
+delete(gca); set(gca,'visible','off');
+text(0.24,0.48,'End of the experiment.','color',[1 1 1],'fontsize',50); drawnow();
+WaitSecs(5);
+% Stop EEG saving
+outputSingleScan(sessionEEG, dec2binvec(255,8))
+outputSingleScan(sessionEEG, [0 0 0 0 0 0 0 0])
+% WaitKeyInputs;
+getkey;
+% sca
+close all
+
